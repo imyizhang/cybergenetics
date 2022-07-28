@@ -51,7 +51,7 @@ napoleon_include_special_with_doc = True
 napoleon_use_admonition_for_examples = False
 napoleon_use_admonition_for_notes = False
 napoleon_use_admonition_for_references = False
-napoleon_use_ivar = True
+napoleon_use_ivar = False
 napoleon_use_param = True
 napoleon_use_rtype = True
 
@@ -68,7 +68,7 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'alabaster'
+html_theme = 'furo'
 html_title = "Cybergenetics Documentation"
 
 # Add any paths that contain custom static files (such as style sheets) here,
