@@ -191,8 +191,8 @@ class PhysicsError(RuntimeError):
 class Task(abc.ABC):
     """Defines a task based on the physical simulation."""
 
-    registered_references = {}
-    registered_rewards = {}
+    reference_registry = {}
+    reward_registry = {}
 
     _observation = None
     _reference = None
@@ -287,7 +287,7 @@ class Task(abc.ABC):
         Args:
             reference (Callable): The reference computation function.
         """
-        cls.registered_references[reference.__name__] = reference
+        cls.reference_registry[reference.__name__] = reference
         return reference
 
     @classmethod
@@ -307,7 +307,7 @@ class Task(abc.ABC):
         Args:
             reward (Callable): The reward computation function.
         """
-        cls.registered_rewards[reward.__name__] = reward
+        cls.reward_registry[reward.__name__] = reward
         return reward
 
     def observation(self, physics: Physics) -> np.ndarray:
@@ -435,6 +435,13 @@ class Environment(gym.Env):
             reward,
         )
         return observation, reward, terminated, info
+
+    def replay(self, buffer: Optional[Buffer] = None) -> None:
+        """Replays the buffer of the environment."""
+        if self._buffer.empty() and (buffer is None):
+            raise RuntimeError
+        buffer = self._buffer if buffer is None else buffer
+        raise NotImplementedError
 
     def close(self) -> None:
         """Cleans up the buffer of the environment."""

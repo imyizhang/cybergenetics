@@ -8,9 +8,45 @@ import scipy.signal as signal
 import gym
 from gym.spaces import Discrete, Box
 
-from .control import Buffer, Physics, Task, Environment, wrappers
+from ..control import Physics, Task, Environment, wrappers
+from .assets.crn import ecoli, yeast
 
-# Reference registry for tracking task
+
+def init(
+    path: Union[str, pathlib.Path] = '.cybergenetics_cache',
+    verbose: bool = False,
+) -> None:
+    path = pathlib.Path(path)
+    try:
+        path.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        pass
+    config = path.joinpath('config.py')
+    src = pathlib.Path(__file__).parent
+    config_default = src.joinpath('assets/crn/config_default.py')
+    config.write_text(config_default.read_text())
+    if verbose:
+        print(f'configuration template {config} is created')
+
+
+registry = {
+    'ecoli': ecoli.configs,
+    'yeast': yeast.configs,
+}
+
+
+def register(name: str, configs: dict) -> None:
+    registry[name] = configs
+
+
+def make(id: str, configs: Union[str, dict]):
+    configs = registry[configs] if isinstance(configs, str) else configs
+    if id == 'CRN-v0':
+        env = CRNEnv(configs=configs['environment'])
+    else:
+        raise RuntimeError
+    env = wrappers.Wrappers(env, **configs['wrappers'])
+    return env
 
 
 @Task.register_reference
@@ -42,9 +78,6 @@ def bpf(t, switches):
         mask_nan &= (1 - mask)
     np.place(y, mask_nan, np.nan)
     return y
-
-
-# Reward registry for tracking task
 
 
 @Task.register_reward
@@ -82,18 +115,6 @@ def scaled_combination(achieved, desired, tolerance, a=100.0, b=10.0):
     "Scaled combination of errors."
     return negative_ae(achieved, desired, tolerance) * a \
         + in_tolerance(achieved, desired, tolerance) * b
-
-
-def make(cls: str, kwargs: dict):
-    physics = CRN(**kwargs['physics'])
-    if cls == 'CRN-v0':
-        task = DiscreteTrack(**kwargs['task'])
-    elif cls == 'CRNContinuous-v0':
-        task = Track(**kwargs['task'])
-    else:
-        raise RuntimeError
-    env = CRNEnv(physics, task, **kwargs['environment'])
-    return CRNWrapper(env, **kwargs['wrappers'])
 
 
 class CRN(Physics):
@@ -194,13 +215,13 @@ class Track(Task):
         tracking: Optional[Union[str, Callable]] = None,
         **tracking_kwargs,
     ) -> None:
-        self.tracking = self.registered_references.get(tracking, None) if isinstance(
+        self.tracking = self.reference_registry.get(tracking, None) if isinstance(
             tracking, str) else tracking
         self.tracking_kwargs = tracking_kwargs
         self.sampling_rate = sampling_rate
         self.dim_observed = dim_observed
         self.tolerance = tolerance
-        self.reward_func = reward if callable(reward) else self.registered_rewards[reward]
+        self.reward_func = reward if callable(reward) else self.reward_registry[reward]
         self.reward_kwargs = reward_kwargs
         self.reward_info = reward_info
         self.observation_noise = observation_noise
@@ -276,33 +297,52 @@ class DiscreteTrack(Track):
 
 class CRNEnv(Environment):
 
-    def __init__(self, physics: Physics, task: Task) -> None:
+    def __init__(
+        self,
+        physics: Optional[Physics] = None,
+        task: Optional[Task] = None,
+        discrete: bool = False,
+        render_mode: str = 'human',
+        configs: Optional[dict] = None,
+    ) -> None:
+        if (physics is None and task is None) and configs is None:
+            raise RuntimeError
+        self.discrete = discrete
+        self.render_mode = render_mode
+        # configs override
+        if configs is not None:
+            self.discrete = configs.get('discrete', False)
+            self.render_mode = configs.get('render_mode', 'human')
+            physics = CRN(**configs.get('physics', {}))
+            if self.discrete:
+                task = Track(**configs.get('task', {}))
+            else:
+                task = DiscreteTrack(**configs.get('task', {}))
         super().__init__(physics, task)
 
-    def render(self, mode: str = 'human', buffer: Optional[Buffer] = None):
-        if self._buffer.empty() and (buffer is None):
+    def render(self):
+        if self._buffer.empty():
             raise RuntimeError
-        buffer = self._buffer if buffer is None else buffer
         tolerance = self._task.tolerance
         sampling_rate = self._task.sampling_rate
         dim_observed = self._task.dim_observed
         # Data: reference trajectory & state / observation  vs. time
-        time = np.array(buffer.trajectory.time)
-        state = np.stack(buffer.trajectory.state, axis=1)
-        observation = np.concatenate(buffer.trajectory.observation, axis=0)
+        time = np.array(self._buffer.trajectory.time)
+        state = np.stack(self._buffer.trajectory.state, axis=1)
+        observation = np.concatenate(self._buffer.trajectory.observation, axis=0)
         delta = 0.1     # simulation sampling rate
         time_reference = np.arange(0, time[-1] + delta, delta)
         reference = self.task.target(time_reference)
         # Data: control signal vs. time
         time_control = np.concatenate([
             np.arange(sampling_rate * i, sampling_rate * (i + 2), sampling_rate)
-            for i in range(len(buffer) - 1)
+            for i in range(len(self._buffer) - 1)
         ])
-        control = np.array(buffer.trajectory.control[1:]).repeat(2)
-        physical_control = np.array(buffer.trajectory.physical_control[1:]).repeat(2)
+        control = np.array(self._buffer.trajectory.control[1:]).repeat(2)
+        physical_control = np.array(self._buffer.trajectory.physical_control[1:]).repeat(2)
         # Data: reward vs. time
         time_reward = time[1:]
-        reward = np.array(buffer.trajectory.reward[1:])
+        reward = np.array(self._buffer.trajectory.reward[1:])
         # Info: reference trajectory & state / observation  vs. time
         state_info = self._physics.state_info
         observation_info = {
@@ -325,7 +365,7 @@ class CRNEnv(Environment):
         except ImportError:
             pass
         # Partially shown
-        if mode == 'human':
+        if self.render_mode == 'human':
             fig, axes = plt.subplots(
                 nrows=2,
                 ncols=1,
@@ -437,42 +477,18 @@ class CRNEnv(Environment):
 
 class CRNWrapper(gym.Wrapper):
 
+    # fix `gym.make()`
+    metadata = {'render_modes': []}
+
     def __init__(
         self,
-        env: CRNEnv,
-        max_episode_steps: Optional[int] = None,
-        full_observation: bool = False,
-        time_aware: bool = False,
-        timestep_aware: bool = False,
-        reference_aware: bool = False,
-        tolerance_aware: bool = False,
-        action_aware: bool = False,
-        rescale_action: bool = False,
-        action_min: Union[float, np.ndarray] = 0.0,
-        action_max: Union[float, np.ndarray] = 1.0,
-        track_episode: bool = False,
-        record_episode: bool = False,
-        path: Union[str, pathlib.Path] = 'episode',
-        **render_kwargs,
+        env: Optional[CRNEnv] = None,
+        configs: Optional[Union[str, dict]] = None,
     ):
-        if max_episode_steps is not None:
-            env = wrappers.LimitTimestep(env, max_episode_steps)
-        if full_observation:
-            env = wrappers.FullObservation(env)
-        if time_aware:
-            env = wrappers.TimeAwareObservation(env)
-        if timestep_aware:
-            env = wrappers.TimestepAwareObservation(env)
-        if reference_aware:
-            env = wrappers.ReferenceAwareObservation(env)
-        if tolerance_aware:
-            env = wrappers.ToleranceAwareObservation(env)
-        if action_aware:
-            env = wrappers.ActionAwareObservation(env)
-        if rescale_action:
-            env = wrappers.RescaleAction(env, action_min, action_max)
-        if track_episode:
-            env = wrappers.TrackEpisode(env)
-        if record_episode:
-            env = wrappers.RecordEpisode(env, path, **render_kwargs)
+        if env is None and configs is None:
+            raise RuntimeError
+        if configs is not None:
+            configs = registry[configs] if isinstance(configs, str) else configs
+            env = CRNEnv(configs=configs['environment'])
+            env = wrappers.Wrappers(env, **configs['wrappers'])
         super().__init__(env)

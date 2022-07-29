@@ -1,5 +1,5 @@
 """The essential wrappers for the control-specific environments."""
-from typing import Callable, Tuple, Union
+from typing import Callable, Tuple, Optional, Union
 import pathlib
 
 import numpy as np
@@ -53,7 +53,49 @@ class TransformReward(gym.RewardWrapper):
         return self.transform(reward)
 
 
-class LimitTimestep(gym.Wrapper):
+class Wrappers(gym.Wrapper):
+
+    def __init__(
+        self,
+        env: gym.Env,
+        max_episode_steps: Optional[int] = None,
+        full_observation: bool = False,
+        time_aware: bool = False,
+        timestep_aware: bool = False,
+        reference_aware: bool = False,
+        tolerance_aware: bool = False,
+        action_aware: bool = False,
+        rescale_action: bool = False,
+        action_min: Union[float, np.ndarray] = 0.0,
+        action_max: Union[float, np.ndarray] = 1.0,
+        track_episode: bool = False,
+        record_episode: bool = False,
+        path: Union[str, pathlib.Path] = '.cybergenetics_cache',
+    ):
+        if max_episode_steps is not None:
+            env = LimitedTimestep(env, max_episode_steps)
+        if full_observation:
+            env = FullObservation(env)
+        if time_aware:
+            env = TimeAwareObservation(env)
+        if timestep_aware:
+            env = TimestepAwareObservation(env)
+        if reference_aware:
+            env = ReferenceAwareObservation(env)
+        if tolerance_aware:
+            env = ToleranceAwareObservation(env)
+        if action_aware:
+            env = ActionAwareObservation(env)
+        if rescale_action:
+            env = RescaleAction(env, action_min, action_max)
+        if track_episode:
+            env = TrackEpisode(env)
+        if record_episode:
+            env = RecordEpisode(env, path)
+        super().__init__(env)
+
+
+class LimitedTimestep(gym.Wrapper):
     """Wrapper that limits timesteps per episode."""
 
     def __init__(self, env: gym.Env, max_episode_steps: int) -> None:
@@ -93,23 +135,26 @@ class TrackEpisode(gym.Wrapper):
 
 
 class RecordEpisode(gym.Wrapper):
-    """Wrapper that records video of episode."""
+    """Wrapper that records video of an episode."""
 
-    def __init__(self, env: gym.Env, path: Union[str, pathlib.Path], **render_kwargs) -> None:
+    def __init__(self, env: gym.Env, path: Union[str, pathlib.Path]) -> None:
         super().__init__(env)
-        self.path = pathlib.Path(path)
-        self.path.mkdir(parents=True, exist_ok=True)
-        self.render_kwargs = render_kwargs
+        self.path = pathlib.Path(path).joinpath('episode_cache')
+        try:
+            self.path.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            pass
         self._frames = []
 
     def step(self, action: Union[int, np.ndarray]) -> Tuple[np.ndarray, float, bool, dict]:
         observation, reward, terminated, info = super().step(action)
-        fig = super().render(**self.render_kwargs)
+        fig = super().render()
         frame = self.path.joinpath(f'fig{self.buffer.timestep.timestep}.png')
         fig.savefig(frame)
         self._frames.append(frame)
         if terminated:
-            with imageio.get_writer('episode.gif', mode='I') as writer:
+            gif = self.path.parent.joinpath('episode.gif')
+            with imageio.get_writer(gif, mode='I') as writer:
                 for frame in self._frames:
                     writer.append_data(imageio.imread(frame))
         return observation, reward, terminated, info
