@@ -15,5 +15,8 @@ docs/build/
 .ipynb_checkpoints/
 *.ipynb
 
+# Cybergenetics
+.cybergenetics_cache/
+
 # Desktop Services Store
 .DS_Store

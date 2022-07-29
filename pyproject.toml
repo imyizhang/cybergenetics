@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cybergenetics"
-version = "0.0.2"
+version = "0.0.3"
 description = "Cybergenetics is a controlled simulating environment for chemical reaction networks (CRNs) and co-cultures."
 authors = ["Yi Zhang, Quentin Badolle"]
 license = "BSD 3-Clause"
