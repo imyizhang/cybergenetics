@@ -71,6 +71,7 @@ class Wrappers(gym.Wrapper):
         track_episode: bool = False,
         record_episode: bool = False,
         path: Union[str, pathlib.Path] = '.cybergenetics_cache',
+        **render_kwargs,
     ):
         if max_episode_steps is not None:
             env = LimitedTimestep(env, max_episode_steps)
@@ -91,7 +92,7 @@ class Wrappers(gym.Wrapper):
         if track_episode:
             env = TrackEpisode(env)
         if record_episode:
-            env = RecordEpisode(env, path)
+            env = RecordEpisode(env, path, **render_kwargs)
         super().__init__(env)
 
 
@@ -137,18 +138,19 @@ class TrackEpisode(gym.Wrapper):
 class RecordEpisode(gym.Wrapper):
     """Wrapper that records video of an episode."""
 
-    def __init__(self, env: gym.Env, path: Union[str, pathlib.Path]) -> None:
+    def __init__(self, env: gym.Env, path: Union[str, pathlib.Path], **render_kwargs) -> None:
         super().__init__(env)
         self.path = pathlib.Path(path).joinpath('episode_cache')
         try:
             self.path.mkdir(parents=True, exist_ok=False)
         except FileExistsError:
             pass
+        self.render_kwargs = render_kwargs
         self._frames = []
 
     def step(self, action: Union[int, np.ndarray]) -> Tuple[np.ndarray, float, bool, dict]:
         observation, reward, terminated, info = super().step(action)
-        fig = super().render()
+        fig = super().render(**self.render_kwargs)
         frame = self.path.joinpath(f'fig{self.buffer.timestep.timestep}.png')
         fig.savefig(frame)
         self._frames.append(frame)

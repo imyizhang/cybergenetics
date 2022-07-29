@@ -320,7 +320,7 @@ class CRNEnv(Environment):
                 task = DiscreteTrack(**configs.get('task', {}))
         super().__init__(physics, task)
 
-    def render(self):
+    def render(self, mode=''):
         if self._buffer.empty():
             raise RuntimeError
         tolerance = self._task.tolerance

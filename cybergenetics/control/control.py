@@ -83,7 +83,8 @@ class Physics(abc.ABC):
     _np_random = None
 
     @property
-    def np_random(self) -> seeding.RandomNumberGenerator:
+    def np_random(self):
+        # def np_random(self) -> seeding.RandomNumberGenerator:
         """Lazily seeds for the random number generator(s) since it is expensive and only needed
         if sampling.
         """
@@ -201,7 +202,8 @@ class Task(abc.ABC):
     _np_random = None
 
     @property
-    def np_random(self) -> seeding.RandomNumberGenerator:
+    def np_random(self):
+        # def np_random(self) -> seeding.RandomNumberGenerator:
         """Lazily seeds since it is expensive and only needed if sampling."""
         if self._np_random is None:
             self.seed()
