@@ -93,9 +93,9 @@ def negative_ae(achieved, desired, tolerance, n=1.0):
 
 
 @Task.register_reward
-def negative_re(achieved, desired, tolerance):
+def negative_re(achieved, desired, tolerance, n=1.0):
     "Negative relative error (RE)."
-    return float(-np.abs(achieved - desired) / desired)
+    return float(-(np.abs(achieved - desired) / desired)**n)
 
 
 @Task.register_reward
@@ -159,11 +159,11 @@ class CRN(Physics):
         self._time = 0.0
         self._state = self.init_state
 
-    def dynamics(self, time: float, state: np.ndarray, control: float):
+    def dynamics(self, time: float, state: np.ndarray, control: float, delta: float):
         if self.ode is None:
             raise NotImplementedError
         return self.ode(state, control, **self.ode_kwargs) \
-            + self.np_random.normal(0.0, self.system_noise)
+            + self.np_random.normal(0.0, self.system_noise * delta)
 
     def reset(self) -> None:
         self._timestep = 0
@@ -186,7 +186,7 @@ class CRN(Physics):
             self._state,
             method=self.integrator,
             t_eval=np.arange(0, sampling_rate + delta, delta),
-            args=(self._physical_control,),
+            args=(self._physical_control, delta),
         )
         self._state = sol.y[:, -1]
         self._state = np.clip(self._state, self.state_min, self.state_max)

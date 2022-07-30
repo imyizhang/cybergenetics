@@ -443,7 +443,10 @@ class Environment(gym.Env):
         if self._buffer.empty() and (buffer is None):
             raise RuntimeError
         buffer = self._buffer if buffer is None else buffer
-        raise NotImplementedError
+        try:
+            return self.render(mode='dashboard')
+        except NotImplementedError:
+            return None
 
     def close(self) -> None:
         """Cleans up the buffer of the environment."""

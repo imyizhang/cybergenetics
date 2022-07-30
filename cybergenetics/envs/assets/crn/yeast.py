@@ -75,16 +75,16 @@ configs = {
             },
         },
         'task': {
-            'tracking': multistage,
-            'stages': np.array([[200, 2400], [400, 3200], [600, 2800]]),
+            'tracking': 'const',     # multistage,
+            'scale': 3200,     # 'stages': np.array([[600, 3200], [1200, 2400]]),
             'sampling_rate': 10,     # sampling rate: in min
             'dim_observed': -1,     # only signal Protein can be observed
             'tolerance': 0.05,
-            'reward': 'gauss',
+            'reward': 'in_tolerance',
             'reward_kwargs': {},
             'reward_info': {
                 'color': 'tab:orange',
-                'label': 'gauss',
+                'label': 'in_tolerance',
                 'ylim': [-0.05, 1.1],
             },
             'observation_noise': 0.0,
@@ -95,7 +95,7 @@ configs = {
         },
     },
     'wrappers': {
-        'max_episode_steps': 60,
+        'max_episode_steps': 6 * 10,     # 10 hours
         'full_observation': False,
         'time_aware': False,
         'timestep_aware': False,
@@ -105,7 +105,7 @@ configs = {
         'rescale_action': False,
         'action_min': 0.0,
         'action_max': 1.0,
-        'track_episode': False,
-        'record_episode': True,
+        'track_episode': True,
+        'record_episode': False,
     },
 }
