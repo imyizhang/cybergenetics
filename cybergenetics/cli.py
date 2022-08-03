@@ -109,7 +109,7 @@ class App():
 def main():
     app = App(
         name='cybergenetics',
-        version='0.0.3',
+        version='0.0.4',
         description='cybergenetics configuration tool',
     )
     app.command(
@@ -117,6 +117,13 @@ def main():
         'init',
         help='generate a configuration template',
         options=[
+            Option(
+                '--crn',
+                '-c',
+                default='ecoli',
+                annotation=str,
+                help='type of configuration template to be generated',
+            ),
             Option(
                 '--path',
                 '-p',

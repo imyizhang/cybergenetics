@@ -444,7 +444,7 @@ class Environment(gym.Env):
             raise RuntimeError
         buffer = self._buffer if buffer is None else buffer
         try:
-            return self.render(mode='dashboard')
+            return self.render()
         except NotImplementedError:
             return None
 

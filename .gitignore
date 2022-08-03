@@ -17,6 +17,7 @@ docs/build/
 
 # Cybergenetics
 .cybergenetics_cache/
+config.py
 
 # Desktop Services Store
 .DS_Store

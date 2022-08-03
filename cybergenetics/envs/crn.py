@@ -11,24 +11,6 @@ from gym.spaces import Discrete, Box
 from ..control import Physics, Task, Environment, wrappers
 from .assets.crn import ecoli, yeast
 
-
-def init(
-    path: Union[str, pathlib.Path] = '.cybergenetics_cache',
-    verbose: bool = False,
-) -> None:
-    path = pathlib.Path(path)
-    try:
-        path.mkdir(parents=True, exist_ok=False)
-    except FileExistsError:
-        pass
-    config = path.joinpath('config.py')
-    src = pathlib.Path(__file__).parent
-    config_default = src.joinpath('assets/crn/config_default.py')
-    config.write_text(config_default.read_text())
-    if verbose:
-        print(f'configuration template {config} is created')
-
-
 registry = {
     'ecoli': ecoli.configs,
     'yeast': yeast.configs,
@@ -39,7 +21,34 @@ def register(name: str, configs: dict) -> None:
     registry[name] = configs
 
 
-def make(id: str, configs: Union[str, dict]):
+def init(
+    crn: str = 'ecoli',
+    path: Union[str, pathlib.Path] = '.',
+    verbose: bool = False,
+) -> None:
+    if crn not in registry:
+        raise RuntimeError
+    path = pathlib.Path(path)
+    try:
+        path.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        pass
+    config = path.joinpath('config.py')
+    src = pathlib.Path(__file__).parent
+    config_default = src.joinpath(f'assets/crn/{crn}.py')
+    config.write_text(config_default.read_text())
+    if verbose:
+        print(f'configuration template {config} is created')
+
+
+def make(
+    id: str,
+    configs: Union[str, dict],
+    path: Union[str, pathlib.Path] = '.',
+):
+    path = pathlib.Path(path)
+    if isinstance(configs, str) and (not path.joinpath('config.py').exists()):
+        init(crn=configs, path=path)
     configs = registry[configs] if isinstance(configs, str) else configs
     if id == 'CRN-v0':
         env = CRNEnv(configs=configs['environment'])
@@ -50,25 +59,49 @@ def make(id: str, configs: Union[str, dict]):
 
 
 @Task.register_reference
-def const(t, scale):
+def const(t: np.ndarray, scale: float) -> np.ndarray:
     "Constant wave."
     return scale + np.zeros_like(t)
 
 
 @Task.register_reference
-def square(t, scale, amplitude, period, phase):
+def square(
+    t: np.ndarray,
+    scale: float,
+    amplitude: float,
+    period: float,
+    phase: float,
+) -> np.ndarray:
     "Square wave."
     return scale + amplitude * signal.square(2 * np.pi * t / period + phase).astype(t.dtype)
 
 
 @Task.register_reference
-def sine(t, scale, amplitude, period, phase):
+def sine(
+    t: np.ndarray,
+    scale: float,
+    amplitude: float,
+    period: float,
+    phase: float,
+) -> np.ndarray:
     "Sine (or Cosine) wave."
     return scale + amplitude * np.sin(2 * np.pi * t / period + phase).astype(t.dtype)
 
 
 @Task.register_reference
-def bpf(t, switches):
+def multistage(t: np.ndarray, stages: np.ndarray) -> np.ndarray:
+    "Multi-stages."
+    stages = np.concatenate((np.zeros((1, 2)), stages), axis=0)
+    y = np.zeros_like(t)
+    y[0] = stages[1, 1]
+    for i in range(stages.shape[0] - 1):
+        mask = (t > stages[i, 0]) & (t <= stages[i + 1, 0])
+        np.place(y, mask, stages[i + 1, 1])
+    return y
+
+
+@Task.register_reference
+def bpf(t: np.ndarray, switches: np.ndarray) -> np.ndarray:
     "Band-pass filter (BPF)."
     y = np.zeros_like(t)
     mask_nan = True
@@ -81,37 +114,66 @@ def bpf(t, switches):
 
 
 @Task.register_reward
-def inverse_ae(achieved, desired, tolerance, n=1.0):
+def inverse_ae(
+    achieved: Union[float, np.ndarray],
+    desired: Union[float, np.ndarray],
+    tolerance: float,
+    n: float = 1.0,
+) -> float:
     "Inverse of absolute error (AE)."
     return float(np.abs(achieved - desired)**(-n))
 
 
 @Task.register_reward
-def negative_ae(achieved, desired, tolerance, n=1.0):
+def negative_ae(
+    achieved: Union[float, np.ndarray],
+    desired: Union[float, np.ndarray],
+    tolerance: float,
+    n: float = 1.0,
+) -> float:
     "Negative absolute error (AE)."
     return float(-np.abs(achieved - desired)**n)
 
 
 @Task.register_reward
-def negative_re(achieved, desired, tolerance, n=1.0):
+def negative_re(
+    achieved: Union[float, np.ndarray],
+    desired: Union[float, np.ndarray],
+    tolerance: float,
+    n: float = 1.0,
+) -> float:
     "Negative relative error (RE)."
     return float(-(np.abs(achieved - desired) / desired)**n)
 
 
 @Task.register_reward
-def in_tolerance(achieved, desired, tolerance):
+def in_tolerance(
+    achieved: Union[float, np.ndarray],
+    desired: Union[float, np.ndarray],
+    tolerance: float,
+) -> float:
     "Whether falling within tolerance."
     return float(np.abs(achieved - desired) / desired < tolerance)
 
 
 @Task.register_reward
-def gauss(achieved, desired, tolerance):
+def gauss(
+    achieved: Union[float, np.ndarray],
+    desired: Union[float, np.ndarray],
+    tolerance: float,
+) -> float:
     "Gauss."
     return float(np.exp(-0.5 * (achieved - desired)**2 / tolerance**2))
 
 
 @Task.register_reward
-def scaled_combination(achieved, desired, tolerance, a=100.0, b=10.0):
+def scaled_combination(
+    achieved: Union[float, np.ndarray],
+    desired: Union[float, np.ndarray],
+    tolerance: float,
+    a: float = 100.0,
+    b: float = 10.0,
+) -> float:
     "Scaled combination of errors."
     return negative_ae(achieved, desired, tolerance) * a \
         + in_tolerance(achieved, desired, tolerance) * b
@@ -125,7 +187,8 @@ class CRN(Physics):
         integrator: str = 'RK45',
         n_sub_timesteps: int = 100,
         system_noise: float = 0.0,
-        actuation_noise: float = 0.0,
+        actuation_error: float = 0.0,
+        actuation_noise: Optional[float] = None,
         state_min: Union[float, np.ndarray] = 0.0,
         state_max: Union[float, np.ndarray] = float(np.finfo(np.float32).max),
         state_dtype: Type = np.float32,
@@ -143,12 +206,17 @@ class CRN(Physics):
         self.integrator = integrator
         self.n_sub_timesteps = n_sub_timesteps
         self.system_noise = system_noise
+        self.actuation_error = actuation_error
         self.actuation_noise = actuation_noise
         self.state_shape = init_state.shape
-        self.state_min = state_min.astype(state_dtype) if isinstance(
-            state_min, np.ndarray) else np.full(self.state_shape, state_min, dtype=state_dtype)
-        self.state_max = state_max.astype(state_dtype) if isinstance(
-            state_max, np.ndarray) else np.full(self.state_shape, state_max, dtype=state_dtype)
+        if isinstance(state_min, np.ndarray):
+            self.state_min = state_min.astype(state_dtype)
+        else:
+            self.state_min = np.full(self.state_shape, state_min, dtype=state_dtype)
+        if isinstance(state_max, np.ndarray):
+            self.state_max = state_max.astype(state_dtype)
+        else:
+            self.state_max = np.full(self.state_shape, state_max, dtype=state_dtype)
         self.state_dtype = state_dtype
         self.state_info = state_info
         self.control_min = control_min
@@ -159,11 +227,11 @@ class CRN(Physics):
         self._time = 0.0
         self._state = self.init_state
 
-    def dynamics(self, time: float, state: np.ndarray, control: float, delta: float):
+    def dynamics(self, time: float, state: np.ndarray, control: float):
         if self.ode is None:
             raise NotImplementedError
         return self.ode(state, control, **self.ode_kwargs) \
-            + self.np_random.normal(0.0, self.system_noise * delta)
+            + self.system_noise * self.np_random.normal(0.0,  1.0)
 
     def reset(self) -> None:
         self._timestep = 0
@@ -174,6 +242,8 @@ class CRN(Physics):
 
     def set_control(self, control: float) -> None:
         self._control = control
+        if self.actuation_noise is None:
+            self.actuation_noise = self.actuation_error * control
         control += self.np_random.normal(0.0, self.actuation_noise)
         control = min(max(control, self.control_min), self.control_max)
         self._physical_control = control
@@ -186,7 +256,7 @@ class CRN(Physics):
             self._state,
             method=self.integrator,
             t_eval=np.arange(0, sampling_rate + delta, delta),
-            args=(self._physical_control, delta),
+            args=(self._physical_control,),
         )
         self._state = sol.y[:, -1]
         self._state = np.clip(self._state, self.state_min, self.state_max)
@@ -201,13 +271,14 @@ class Track(Task):
 
     def __init__(
         self,
-        sampling_rate: float,
-        dim_observed: int,
-        tolerance: float,
-        reward: Union[str, Callable],
+        sampling_rate: float = 1,
+        observability: int = -1,
+        reward: Union[str, Callable] = 'in_tolerance',
         reward_kwargs: dict = {},
         reward_info: dict = {},
-        observation_noise: float = 0.0,
+        tolerance: float = 0.05,
+        observation_error: float = 0.0,
+        observation_noise: Optional[float] = None,
         action_min: Union[float, np.ndarray] = -1.0,
         action_max: Union[float, np.ndarray] = 1.0,
         action_dtype: Type = np.float32,
@@ -215,21 +286,25 @@ class Track(Task):
         tracking: Optional[Union[str, Callable]] = None,
         **tracking_kwargs,
     ) -> None:
-        self.tracking = self.reference_registry.get(tracking, None) if isinstance(
-            tracking, str) else tracking
+        self.tracking = tracking if callable(tracking) else self.reference_registry[tracking]
         self.tracking_kwargs = tracking_kwargs
         self.sampling_rate = sampling_rate
-        self.dim_observed = dim_observed
-        self.tolerance = tolerance
+        self.observability = observability
         self.reward_func = reward if callable(reward) else self.reward_registry[reward]
         self.reward_kwargs = reward_kwargs
         self.reward_info = reward_info
+        self.tolerance = tolerance
+        self.observation_error = observation_error
         self.observation_noise = observation_noise
         self.action_shape = (1,)
-        self.action_min = action_min.astype(action_dtype) if isinstance(
-            action_min, np.ndarray) else np.full(self.action_shape, action_min, dtype=action_dtype)
-        self.action_max = action_max.astype(action_dtype) if isinstance(
-            action_max, np.ndarray) else np.full(self.action_shape, action_max, dtype=action_dtype)
+        if isinstance(action_min, np.ndarray):
+            self.action_min = action_min.astype(action_dtype)
+        else:
+            self.action_min = np.full(self.action_shape, action_min, dtype=action_dtype)
+        if isinstance(action_max, np.ndarray):
+            self.action_max = action_max.astype(action_dtype)
+        else:
+            self.action_max = np.full(self.action_shape, action_max, dtype=action_dtype)
         self.action_dtype = action_dtype
         self.action_info = action_info
 
@@ -247,8 +322,8 @@ class Track(Task):
 
     def observation_space(self, physics: Physics) -> Box:
         return Box(
-            low=physics.state_min[[self.dim_observed]],
-            high=physics.state_max[[self.dim_observed]],
+            low=physics.state_min[[self.observability]],
+            high=physics.state_max[[self.observability]],
             dtype=physics.state_dtype,
         )
 
@@ -261,9 +336,8 @@ class Track(Task):
         if isinstance(self.action_space(physics), Discrete):
             action = (action + 1) / self.action_space(physics).n
         else:
-            action = float(action[0])
-            action = (action - float(self.action_min)) / (float(self.action_max) -
-                                                          float(self.action_min))
+            action = (float(action) - float(self.action_min)) \
+                / (float(self.action_max) - float(self.action_min))
         control = physics.control_min + action * (physics.control_max - physics.control_min)
         physics.set_control(control)
 
@@ -277,15 +351,24 @@ class Track(Task):
 
     def observation(self, physics: Physics) -> np.ndarray:
         state = physics.state()
-        self._observation = state[[self.dim_observed]]
+        self._observation = state[[self.observability]]
+        if self.observation_noise is None:
+            self.observation_noise = self.observation_error * self._observation
         self._observation += self.np_random.normal(0.0, self.observation_noise)
-        self._observation = np.clip(self._observation, physics.state_min[[self.dim_observed]],
-                                    physics.state_max[[self.dim_observed]])
+        self._observation = np.clip(
+            self._observation,
+            physics.state_min[[self.observability]],
+            physics.state_max[[self.observability]],
+        )
         return self._observation.astype(physics.state_dtype)
 
     def reward(self, physics: Physics) -> float:
-        self._reward = self.reward_func(self._observation, self._reference, self.tolerance,
-                                        **self.reward_kwargs)
+        self._reward = self.reward_func(
+            self._observation,
+            self._reference,
+            self.tolerance,
+            **self.reward_kwargs,
+        )
         return self._reward
 
 
@@ -320,12 +403,12 @@ class CRNEnv(Environment):
                 task = DiscreteTrack(**configs.get('task', {}))
         super().__init__(physics, task)
 
-    def render(self, mode=''):
+    def render(self, mode: Optional[str] = None):
         if self._buffer.empty():
             raise RuntimeError
         tolerance = self._task.tolerance
         sampling_rate = self._task.sampling_rate
-        dim_observed = self._task.dim_observed
+        observability = self._task.observability
         # Data: reference trajectory & state / observation  vs. time
         time = np.array(self._buffer.trajectory.time)
         state = np.stack(self._buffer.trajectory.state, axis=1)
@@ -346,8 +429,8 @@ class CRNEnv(Environment):
         # Info: reference trajectory & state / observation  vs. time
         state_info = self._physics.state_info
         observation_info = {
-            'color': state_info['color'][dim_observed],
-            'label': state_info['label'][dim_observed],
+            'color': state_info['color'][observability],
+            'label': state_info['label'][observability],
             'ylim': state_info['ylim'],
         }
         # Info: control signal vs. time
@@ -401,7 +484,7 @@ class CRNEnv(Environment):
             axes[1, 0].set_xlabel('Time (min)')
             # Subplot: reference trajectory & observation vs. time
             self.plot_reference(axes[0, 1], time_reference, reference, tolerance)
-            self.plot_observation(axes[0, 1], time, observation, state[dim_observed],
+            self.plot_observation(axes[0, 1], time, observation, state[observability],
                                   **observation_info)
             # Subplot: reward vs. time
             self.plot_reward(axes[1, 1], time_reward, reward, **reward_info)

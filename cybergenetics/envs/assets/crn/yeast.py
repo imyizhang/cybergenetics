@@ -18,11 +18,11 @@ k_trans = 1.4514
 k_degP = 0.007
 
 # Initial state of the parametric ODE: x(0)
-yeast_init = np.array([0.0, k_basal / k_degR, (k_trans * k_basal) / (k_degP * k_degR)])
+init_state = np.array([0.0, k_basal / k_degR, (k_trans * k_basal) / (k_degP * k_degR)])
 
 
 # Define the RHS of the parametric ODE: dx/dt = f(x(t), u(t))
-def yeast_ode(x: np.ndarray, u: float) -> np.ndarray:
+def ode(x: np.ndarray, u: float) -> np.ndarray:
     TF_on, mRNA, Protein = x
     dTF_ondt = u * k_on * (TF_tot - TF_on) - k_off * TF_on
     dmRNAdt = k_basal + k_max * (TF_on**n) / (K_d**n + TF_on**n) - k_degR * mRNA
@@ -33,19 +33,17 @@ def yeast_ode(x: np.ndarray, u: float) -> np.ndarray:
 
 # -- Specify the target and reward in the task ---------------------------------------------------
 
+# Define the target, i.e. the reference computation functioon
+# def reference_func(t: np.ndarray) -> np.ndarray:
+#     return
 
-# target
-def multistage(t: np.ndarray, stages: np.ndarray) -> np.ndarray:
-    stages = np.concatenate((np.zeros((1, 2)), stages), axis=0)
-    y = np.zeros_like(t)
-    y[0] = stages[1, 1]
-    for i in range(stages.shape[0] - 1):
-        mask = (t > stages[i, 0]) & (t <= stages[i + 1, 0])
-        np.place(y, mask, stages[i + 1, 1])
-    return y
-
-
-# reward
+# Define the reward computation function
+# def reward_func(
+#     achieved: Union[float, np.ndarray],
+#     desired: Union[float, np.ndarray],
+#     tolerance: float,
+# ) -> float:
+#     return
 
 # -- Environment configuration -------------------------------------------------------------------
 configs = {
@@ -53,13 +51,14 @@ configs = {
         'discrete': False,
         'render_mode': 'dashboard',
         'physics': {
-            'ode': yeast_ode,
-            'init_state': yeast_init,
+            'ode': ode,
+            'init_state': init_state,
+            'integrator': 'RK45',
+            'n_sub_timesteps': 20,
             'system_noise': 0.0,
             'actuation_noise': 0.0,
             'state_min': 0.0,
-            'state_max': np.inf,
-            'state_dtype': np.float32,
+            'state_max': float(np.finfo(np.float32).max),
             'state_info': {
                 'color': ['tab:red', 'tab:purple', 'tab:green'],
                 'label': ['TF_on', 'mRNA', 'Protein'],
@@ -75,11 +74,10 @@ configs = {
             },
         },
         'task': {
-            'tracking': 'const',     # multistage,
-            'scale': 3200,     # 'stages': np.array([[600, 3200], [1200, 2400]]),
-            'sampling_rate': 10,     # sampling rate: in min
-            'dim_observed': -1,     # only signal Protein can be observed
-            'tolerance': 0.05,
+            'tracking': 'const',
+            'scale': 3200,
+            'sampling_rate': 10,     # per min
+            'observability': -1,     # only signal 'Protein' can be observed
             'reward': 'in_tolerance',
             'reward_kwargs': {},
             'reward_info': {
@@ -87,11 +85,8 @@ configs = {
                 'label': 'in_tolerance',
                 'ylim': [-0.05, 1.1],
             },
-            'observation_noise': 0.0,
-            'action_min': -1.0,
-            'action_max': 1.0,
-            'action_dtype': np.float32,
-            'action_info': {},
+            'tolerance': 0.05,
+            'observation_error': 0.05,
         },
     },
     'wrappers': {
