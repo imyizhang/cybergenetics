@@ -64,6 +64,9 @@ class Wrappers(gym.Wrapper):
         timestep_aware: bool = False,
         reference_aware: bool = False,
         tolerance_aware: bool = False,
+        tolerance_recall_aware: bool = False,
+        recall_steps: int = 2,
+        tolerance: str = 're',
         action_aware: bool = False,
         rescale_action: bool = False,
         action_min: Union[float, np.ndarray] = 0.0,
@@ -84,7 +87,9 @@ class Wrappers(gym.Wrapper):
         if reference_aware:
             env = ReferenceAwareObservation(env)
         if tolerance_aware:
-            env = ToleranceAwareObservation(env)
+            env = ToleranceAwareObservation(env, tolerance)
+        if tolerance_recall_aware:
+            env = ToleranceRecallAwareObservation(env, recall_steps, tolerance)
         if action_aware:
             env = ActionAwareObservation(env)
         if rescale_action:
@@ -228,23 +233,59 @@ class ReferenceAwareObservation(gym.ObservationWrapper):
 class ToleranceAwareObservation(gym.ObservationWrapper):
     """Wrapper that augments the observation with current tolerance."""
 
-    def __init__(self, env: gym.Env) -> None:
+    def __init__(self, env: gym.Env, tolerance: Optional[str] = None) -> None:
         super().__init__(env)
         self.observation_space = Box(
             low=np.append(self.observation_space.low, 0.0),
             high=np.append(self.observation_space.high, np.inf),
             dtype=self.observation_space.dtype,
         )
+        self._tolerance = tolerance
 
     def observation(self, observation: np.ndarray) -> np.ndarray:
-        reference = self.buffer.timestep.reference
-        tolerance = self.task.tolerance
-        _in_tolerance = self.in_tolerance(observation, reference, tolerance)
-        return np.append(observation, _in_tolerance).astype(self.observation_space.dtype)
+        tolerance = self.tolerance(self.buffer.timestep.observation,
+                                   self.buffer.timestep.reference)
+        return np.append(observation, tolerance).astype(self.observation_space.dtype)
 
-    @staticmethod
-    def in_tolerance(achieved, desired, tolerance):
-        return float(np.abs(achieved - desired) / desired < tolerance)
+    def tolerance(self, achieved, desired):
+        if self._tolerance == 'in_tolerance':
+            return (np.abs(achieved - desired) / desired < 0.05)
+        elif self._tolerance == 'ae':
+            return np.abs(achieved - desired)
+        elif self._tolerance == 're':
+            return (np.abs(achieved - desired) / desired)
+
+
+class ToleranceRecallAwareObservation(gym.ObservationWrapper):
+    """Wrapper that augments the observation with historically accumulated tolerance."""
+
+    def __init__(self,
+                 env: gym.Env,
+                 recall_steps: int = 5,
+                 tolerance: Optional[str] = None) -> None:
+        super().__init__(env)
+        self.observation_space = Box(
+            low=np.append(self.observation_space.low, 0.0),
+            high=np.append(self.observation_space.high, np.inf),
+            dtype=self.observation_space.dtype,
+        )
+        self._w = recall_steps
+        self._tolerance = tolerance
+
+    def observation(self, observation: np.ndarray) -> np.ndarray:
+        observations = self.buffer.trajectory.observation
+        references = self.buffer.trajectory.reference
+        tolerance = self.tolerance(np.array(observations[-self._w:]),
+                                   np.array(references[-self._w:]))
+        return np.append(observation, tolerance).astype(self.observation_space.dtype)
+
+    def tolerance(self, achieved, desired):
+        if self._tolerance == 'in_tolerance':
+            return np.sum(np.abs(achieved - desired) / desired < 0.05)
+        elif self._tolerance == 'ae':
+            return np.sum(np.abs(achieved - desired))
+        elif self._tolerance == 're':
+            return np.sum(np.abs(achieved - desired) / desired)
 
 
 class ActionAwareObservation(gym.ObservationWrapper):
@@ -259,8 +300,11 @@ class ActionAwareObservation(gym.ObservationWrapper):
         )
 
     def observation(self, observation: np.ndarray) -> np.ndarray:
-        return np.append(observation,
-                         self.buffer.timestep.action).astype(self.observation_space.dtype)
+        if self.buffer.timestep.action is None:
+            action = 0.0
+        else:
+            action = self.buffer.timestep.action
+        return np.append(observation, action).astype(self.observation_space.dtype)
 
 
 class RescaleAction(gym.ActionWrapper):

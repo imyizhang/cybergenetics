@@ -109,7 +109,7 @@ class App():
 def main():
     app = App(
         name='cybergenetics',
-        version='0.0.4',
+        version='0.0.5',
         description='cybergenetics configuration tool',
     )
     app.command(

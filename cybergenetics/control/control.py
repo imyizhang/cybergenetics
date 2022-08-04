@@ -457,3 +457,4 @@ class Environment(gym.Env):
         self._np_random, _ = seeding.np_random(seed)
         self._physics.seed(seed)
         self._task.seed(seed)
+        self.action_space.seed(seed)

@@ -3,8 +3,9 @@ from typing import Callable, Optional, Union, Type
 import pathlib
 
 import numpy as np
-import scipy.integrate as integrate
 import scipy.signal as signal
+import scipy.integrate as integrate
+import sdeint
 import gym
 from gym.spaces import Discrete, Box
 
@@ -113,6 +114,22 @@ def bpf(t: np.ndarray, switches: np.ndarray) -> np.ndarray:
     return y
 
 
+def ae(
+    achieved: Union[float, np.ndarray],
+    desired: Union[float, np.ndarray],
+    n: float = 1.0,
+) -> float:
+    return float(-np.abs(achieved - desired)**n)
+
+
+def re(
+    achieved: Union[float, np.ndarray],
+    desired: Union[float, np.ndarray],
+    n: float = 1.0,
+) -> float:
+    return float((np.abs(achieved - desired) / desired)**n)
+
+
 @Task.register_reward
 def inverse_ae(
     achieved: Union[float, np.ndarray],
@@ -121,7 +138,7 @@ def inverse_ae(
     n: float = 1.0,
 ) -> float:
     "Inverse of absolute error (AE)."
-    return float(np.abs(achieved - desired)**(-n))
+    return ae(achieved, desired, n)**(-1)
 
 
 @Task.register_reward
@@ -132,7 +149,7 @@ def negative_ae(
     n: float = 1.0,
 ) -> float:
     "Negative absolute error (AE)."
-    return float(-np.abs(achieved - desired)**n)
+    return -ae(achieved, desired, n)
 
 
 @Task.register_reward
@@ -143,7 +160,7 @@ def negative_re(
     n: float = 1.0,
 ) -> float:
     "Negative relative error (RE)."
-    return float(-(np.abs(achieved - desired) / desired)**n)
+    return -re(achieved, desired, n)
 
 
 @Task.register_reward
@@ -153,7 +170,7 @@ def in_tolerance(
     tolerance: float,
 ) -> float:
     "Whether falling within tolerance."
-    return float(np.abs(achieved - desired) / desired < tolerance)
+    return float(re(achieved, desired) < tolerance)
 
 
 @Task.register_reward
@@ -163,20 +180,63 @@ def gauss(
     tolerance: float,
 ) -> float:
     "Gauss."
-    return float(np.exp(-0.5 * (achieved - desired)**2 / tolerance**2))
+    return float(np.exp(-0.5 * ae(achieved, desired)**2 / tolerance**2))
 
 
 @Task.register_reward
-def scaled_combination(
+def comb(
     achieved: Union[float, np.ndarray],
     desired: Union[float, np.ndarray],
     tolerance: float,
-    a: float = 100.0,
-    b: float = 10.0,
+    error: str = 're',
+    a: float = 10.0,
+    b: float = 100.0,
 ) -> float:
     "Scaled combination of errors."
-    return negative_ae(achieved, desired, tolerance) * a \
-        + in_tolerance(achieved, desired, tolerance) * b
+    if error == 'ae':
+        err = ae
+    elif error == 're':
+        err = re
+    return in_tolerance(achieved, desired, tolerance) * a \
+        - err(achieved, desired) * b
+
+
+@Task.register_reward
+def comb_recall(
+    achieved: Union[float, np.ndarray],
+    desired: Union[float, np.ndarray],
+    tolerance: float,
+    hist_achieved: list,
+    hist_desired: list,
+    error: str = 're',
+    a: float = 10.0,
+    b: float = 1.0,
+) -> float:
+    "Scaled combination of errors."
+    if error == 'ae':
+        err = ae
+    elif error == 're':
+        err = re
+    return float(err(achieved, desired) < tolerance) * a \
+        - float(
+            err(hist_achieved[-1], hist_desired[-1]) >= err(hist_achieved[-2], hist_desired[-2])
+            ) * b
+
+
+def f(dynamics, *args):
+
+    def drift(x, t):
+        return dynamics(t, x, *args)
+
+    return drift
+
+
+def g(noise):
+
+    def diffusion(x, t):
+        return noise * np.diag([1., 1., 1.])
+
+    return diffusion
 
 
 class CRN(Physics):
@@ -230,8 +290,7 @@ class CRN(Physics):
     def dynamics(self, time: float, state: np.ndarray, control: float):
         if self.ode is None:
             raise NotImplementedError
-        return self.ode(state, control, **self.ode_kwargs) \
-            + self.system_noise * self.np_random.normal(0.0,  1.0)
+        return self.ode(state, control, **self.ode_kwargs)
 
     def reset(self) -> None:
         self._timestep = 0
@@ -250,15 +309,28 @@ class CRN(Physics):
 
     def step(self, sampling_rate: float) -> None:
         delta = sampling_rate / self.n_sub_timesteps
-        sol = integrate.solve_ivp(
-            self.dynamics,
-            (0, sampling_rate),
-            self._state,
-            method=self.integrator,
-            t_eval=np.arange(0, sampling_rate + delta, delta),
-            args=(self._physical_control,),
-        )
-        self._state = sol.y[:, -1]
+        t_eval = np.arange(0, sampling_rate + delta, delta)
+        if self.system_noise == 0.0:
+            print("'scipy.integrate.solve_ivp' is using")
+            sol = integrate.solve_ivp(
+                self.dynamics,
+                (0, sampling_rate),
+                self._state,
+                method=self.integrator,
+                t_eval=t_eval,
+                args=(self._physical_control,),
+            )
+            sol = sol.y[:, -1]
+        else:
+            args = (self._physical_control,)
+            sol = sdeint.itoSRI2(
+                f(self.dynamics, *args),
+                g(self.system_noise),
+                self._state,
+                t_eval,
+            )
+            sol = sol[-1]
+        self._state = sol
         self._state = np.clip(self._state, self.state_min, self.state_max)
         self._timestep += 1
         self._time += sampling_rate
@@ -268,6 +340,9 @@ class CRN(Physics):
 
 
 class Track(Task):
+
+    _observations = []
+    _references = []
 
     def __init__(
         self,
@@ -290,6 +365,9 @@ class Track(Task):
         self.tracking_kwargs = tracking_kwargs
         self.sampling_rate = sampling_rate
         self.observability = observability
+        if reward == 'comb_recall':
+            reward_kwargs['hist_achieved'] = self._observations
+            reward_kwargs['hist_desireed'] = self._references
         self.reward_func = reward if callable(reward) else self.reward_registry[reward]
         self.reward_kwargs = reward_kwargs
         self.reward_info = reward_info
@@ -331,6 +409,8 @@ class Track(Task):
         self._observation = None
         self._reference = None
         self._reward = None
+        self._observations = []
+        self._references = []
 
     def before_step(self, action: Union[int, np.ndarray], physics: Physics) -> None:
         if isinstance(self.action_space(physics), Discrete):
@@ -347,6 +427,7 @@ class Track(Task):
     def reference(self, physics: Physics) -> np.ndarray:
         time = np.array([physics.time()]).astype(physics.state_dtype)
         self._reference = self.target(time)
+        self._references.append(self._reference)
         return self._reference.astype(physics.state_dtype)
 
     def observation(self, physics: Physics) -> np.ndarray:
@@ -360,6 +441,7 @@ class Track(Task):
             physics.state_min[[self.observability]],
             physics.state_max[[self.observability]],
         )
+        self._observations.append(self._observation)
         return self._observation.astype(physics.state_dtype)
 
     def reward(self, physics: Physics) -> float:
@@ -398,12 +480,12 @@ class CRNEnv(Environment):
             self.render_mode = configs.get('render_mode', 'human')
             physics = CRN(**configs.get('physics', {}))
             if self.discrete:
-                task = Track(**configs.get('task', {}))
-            else:
                 task = DiscreteTrack(**configs.get('task', {}))
+            else:
+                task = Track(**configs.get('task', {}))
         super().__init__(physics, task)
 
-    def render(self, mode: Optional[str] = None):
+    def render(self, mode: Optional[str] = None, fixed_episode_steps: Optional[int] = None):
         if self._buffer.empty():
             raise RuntimeError
         tolerance = self._task.tolerance
@@ -413,8 +495,12 @@ class CRNEnv(Environment):
         time = np.array(self._buffer.trajectory.time)
         state = np.stack(self._buffer.trajectory.state, axis=1)
         observation = np.concatenate(self._buffer.trajectory.observation, axis=0)
+        if fixed_episode_steps is not None:
+            fixed_time = fixed_episode_steps * sampling_rate
+        else:
+            fixed_time = time[-1]
         delta = 0.1     # simulation sampling rate
-        time_reference = np.arange(0, time[-1] + delta, delta)
+        time_reference = np.arange(0, fixed_time + delta, delta)
         reference = self.task.target(time_reference)
         # Data: control signal vs. time
         time_control = np.concatenate([
@@ -431,6 +517,7 @@ class CRNEnv(Environment):
         observation_info = {
             'color': state_info['color'][observability],
             'label': state_info['label'][observability],
+            'xlim': state_info['xlim'],
             'ylim': state_info['ylim'],
         }
         # Info: control signal vs. time
@@ -493,17 +580,18 @@ class CRNEnv(Environment):
         return fig
 
     @staticmethod
-    def plot_state(ax, time, state, color, label, ylim):
+    def plot_state(ax, time, state, color, label, xlim, ylim):
         for i in range(state.shape[0]):
             ax.plot(time, state[i], '-', color=color[i], label=label[i], alpha=0.85)
             if len(time) > 0:
                 ax.plot(time[-1], state[i][-1], marker='.', color=color[i])
         ax.legend(loc='upper right', framealpha=0.2)
+        ax.set_xlim(xlim)
         ax.set_ylim(ylim)
         ax.set_ylabel('')
 
     @staticmethod
-    def plot_control(ax, time, control, physical_control, color, label, ylim):
+    def plot_control(ax, time, control, physical_control, color, label, xlim, ylim):
         ax.plot(time, control, '-', color=color, label=label, alpha=0.85)
         if len(time) > 0:
             ax.plot(time[-1], control[-1], marker='.', color=color)
@@ -517,6 +605,7 @@ class CRNEnv(Environment):
             if len(time) > 0:
                 ax.plot(time[-1], physical_control[-1], marker='.', color=color, alpha=0.5)
         ax.legend(loc='upper right', framealpha=0.2)
+        ax.set_xlim(xlim)
         ax.set_ylim(ylim)
         ax.set_ylabel('')
 
@@ -536,7 +625,7 @@ class CRNEnv(Environment):
         ax.set_ylabel('')
 
     @staticmethod
-    def plot_observation(ax, time, observation, state, color, label, ylim):
+    def plot_observation(ax, time, observation, state, color, label, xlim, ylim):
         ax.plot(time, observation, '-', color=color, label=label + ' observed', alpha=0.85)
         if len(time) > 0:
             ax.plot(time[-1], observation[-1], marker='.', color=color)
@@ -545,15 +634,17 @@ class CRNEnv(Environment):
             if len(time) > 0:
                 ax.plot(time[-1], state[-1], marker='.', color=color, alpha=0.5)
         ax.legend(loc='upper right', framealpha=0.2)
+        ax.set_xlim(xlim)
         ax.set_ylim(ylim)
         ax.set_ylabel('')
 
     @staticmethod
-    def plot_reward(ax, time, reward, color, label, ylim):
+    def plot_reward(ax, time, reward, color, label, xlim, ylim):
         ax.plot(time, reward, color=color, label=label + ' reward', alpha=0.85)
         if len(time) > 0:
             ax.plot(time[-1], reward[-1], marker='.', color=color)
         ax.legend(loc='upper right', framealpha=0.2)
+        ax.set_xlim(xlim)
         ax.set_ylim(ylim)
         ax.set_ylabel('')
 

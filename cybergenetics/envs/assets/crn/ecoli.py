@@ -49,12 +49,14 @@ configs = {
             'integrator': 'RK45',
             'n_sub_timesteps': 20,
             'system_noise': 0.0,
-            'actuation_noise': 0.0,
+            'actuation_error': 0.0,
+            'actuation_noise': None,
             'state_min': 0.0,
-            'state_max': float(np.finfo(np.float32).max),
+            'state_max': np.inf,
             'state_info': {
                 'color': ['tab:red', 'tab:purple', 'tab:green'],
                 'label': ['R', 'P', 'G'],
+                'xlim': [-1, 601],
                 'ylim': [0.8, 2.2],
             },
             'control_min': 0.0,
@@ -62,23 +64,26 @@ configs = {
             'control_info': {
                 'color': 'tab:blue',
                 'label': 'I (%)',
+                'xlim': [-1, 601],
                 'ylim': [-0.5, 20.5],
             },
         },
         'task': {
             'tracking': 'const',
             'scale': 1.8,
-            'sampling_rate': 10,     # per min
+            'sampling_rate': 5,     # per min
             'observability': -1,     # only signal 'G' can be observed
-            'reward': 'gauss',
+            'reward': 'in_tolerance',
             'reward_kwargs': {},
             'reward_info': {
                 'color': 'tab:orange',
-                'label': 'gauss',
+                'label': 'in_tolerance',
+                'xlim': [-1, 601],
                 'ylim': [-0.05, 1.1],
             },
             'tolerance': 0.05,
             'observation_error': 0.0,
+            'observation_noise': None,
         },
     },
     'wrappers': {
@@ -88,11 +93,15 @@ configs = {
         'timestep_aware': False,
         'reference_aware': False,
         'tolerance_aware': False,
+        'tolerance_recall_aware': False,
+        'recall_steps': 2,
+        'tolerance': 're',
         'action_aware': False,
         'rescale_action': False,
         'action_min': 0.0,
         'action_max': 1.0,
-        'track_episode': True,
+        'track_episode': False,
         'record_episode': False,
+        'fixed_episode_steps': 6 * 10,
     },
 }
