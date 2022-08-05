@@ -311,7 +311,6 @@ class CRN(Physics):
         delta = sampling_rate / self.n_sub_timesteps
         t_eval = np.arange(0, sampling_rate + delta, delta)
         if self.system_noise == 0.0:
-            print("'scipy.integrate.solve_ivp' is using")
             sol = integrate.solve_ivp(
                 self.dynamics,
                 (0, sampling_rate),

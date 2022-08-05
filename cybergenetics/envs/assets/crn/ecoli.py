@@ -87,14 +87,14 @@ configs = {
         },
     },
     'wrappers': {
-        'max_episode_steps': 6 * 10,     # 10 hours
+        'max_episode_steps': 6 * 10,     # 5 hours
         'full_observation': False,
         'time_aware': False,
         'timestep_aware': False,
         'reference_aware': False,
         'tolerance_aware': False,
         'tolerance_recall_aware': False,
-        'recall_steps': 2,
+        'recall_steps': 3,
         'tolerance': 're',
         'action_aware': False,
         'rescale_action': False,
